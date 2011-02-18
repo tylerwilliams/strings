@@ -1,15 +1,18 @@
 class Thready {
   
   // current position and original position
-  float xp0, yp0, xpo0, ypo0;
-  float xp1, yp1, xpo1, ypo1;
+  float xp0, yp0, ypt0;
+  float xp1, yp1, ypt1;
   // store distance
   float dx, dy;
   // array of current start/end points
   PVector pt0, pt1;
   // store original position
   PVector pto0, pto1;
-    
+  
+  // My current hand
+  Hand currentHand = null;
+  
   // my permanent midpoint
   float xMid, yMid;		
   // the position of my swinging pendulum point (midpoint)
@@ -86,6 +89,8 @@ class Thready {
   // current stretch strength as ratio
   float rStrength;
   
+    // easing resize ratio
+  float resizeEase = 0.08;
   // my pitch index (0, 1, 2...) - and as ratio
   int pitchInd; float rPitch;
   // reference to my audio sample
@@ -110,6 +115,8 @@ class Thready {
   
   boolean isFirstRun = true;
   
+    // is resizing
+  boolean isResizing = false;
   // -----------------------------------------------------
   // Constructor
   // -----------------------------------------------------
@@ -136,6 +143,7 @@ class Thready {
   void upd() {
     // update position - don't need to trigger unless it's moving
     // updPos();
+    if (isResizing) updPos();
     
     // is thread currently grabbed
     if (isGrabbed) {
@@ -148,8 +156,18 @@ class Thready {
     redraw();
   }
   
-  // update position
+// update position
   void updPos() {
+    if (isResizing) {
+      yp0 += (ypt0-yp0)*resizeEase;
+      yp1 += (ypt1-yp1)*resizeEase;
+      // are we there?
+      if (abs(ypt0-yp0) < 1) {
+        // snap there
+        yp0 = ypt0; yp1 = ypt1;
+        resizeDone();
+      }
+    }
     // store values in my point object
     pt0.x = xp0; pt0.y = yp0;
     pt1.x = xp1; pt1.y = yp1;
@@ -175,17 +193,19 @@ class Thready {
     xc = xMid; yc = yMid;
     // set my pitch index (0, 1, 2, 3...)
     pitchInd = floor(rPitch*(notes-0.0001));
-    // need to initialize for that sample?
-    if (arrSamples[pitchInd] == null) {
-      // load that sample
-      String pre = pitchInd < 10 ? "0" : "";
-      // store it
-      au = arrSamples[pitchInd] = minim.loadSample("cello_" + pre + pitchInd + ".mp3", 1024);
-    } else {
-      // my audio object
-      au = arrSamples[pitchInd];
+    // don't run this if we're mid-resize
+    if (!isResizing) {
+      // need to initialize for that sample?
+      if (arrSamples[pitchInd] == null) {
+        // load that sample
+        String pre = pitchInd < 10 ? "0" : "";
+        // store it
+        au = arrSamples[pitchInd] = minim.loadSample("cello_" + pre + pitchInd + ".mp3", 1024);
+      } else {
+        // my audio object
+        au = arrSamples[pitchInd];
+      }
     }
-    
     // store max distance we can pull from middle of string perpendicularly
     distMax = rDistMax*len;
     //
@@ -257,9 +277,15 @@ class Thready {
   
   // update while grabbed
   void updGrab() {
-    float xu = getUserX(); float yu = getUserY();
+    if (currentHand.isDead) {
+      drop();
+      return;
+    }
+    float xu = currentHand.location.x;
+    float yu = currentHand.location.y;
+//    float xu = getUserX(); float yu = getUserY();
     // get current mouse position
-    xu = getUserX(); yu = getUserY();
+//    xu = getUserX(); yu = getUserY();
     // how far away is it from the line
     float dxu = xu-xp0; float dyu = yu-yp0;
     // angle
@@ -324,17 +350,17 @@ class Thready {
   // Pluck and grab functions
   // -----------------------------------------------------  
   // brush over this string in one frame
-  void pluck(float xp, float yp, boolean byUser) {
-    float xu = getUserX(); float yu = getUserY();
+  void pluck(float xp, float yp, Hand h) {
+    float xu = h.location.x;
+    float yu = h.location.y;
+//    float xu = getUserX(); float yu = getUserY();
     // store as initial position
     xgi = xg = xp; ygi = yg = yp;
     // if it was triggered by a train
-    if (byUser) {
-      // user's current mouse position
-      xu = getUserX(); yu = getUserY();
-      // get average speed from main class
-      float spd = getSpdAvg();
-    }
+
+    // get average speed from main class
+    float spd = h.rSpdAvg;
+
     // how far away is it from the line
     float dxu = xu-xp0; float dyu = yu-yp0;			
     // use our current xg and yg, that's where the user intersected the string
@@ -381,8 +407,9 @@ class Thready {
   }
   
   // grab this string and hold it
-  void grab(float xp, float yp, boolean byUser) {
+  void grab(float xp, float yp, Hand h) {
     grabbed++;
+    currentHand = h;
     // store as initial position
     xgi = xg = xp; ygi = yg = yp;
     // start counter			
@@ -404,10 +431,12 @@ class Thready {
     // calculate gain
     float gain = lerp(gain0, gain1, rStrength);
     // set pan based on x position - from -1 to 1
-    float pan = lerp(pan0, pan1, lim(getUserX()/width, 0, 1));
+    
+    float pan = lerp(pan0, pan1, lim(currentHand.location.x/width, 0, 1));
     // play note
     playNote(gain, pan);
     // start oscillation
+    currentHand=null;
     this.startOsc();	
   } 
 
@@ -432,6 +461,19 @@ class Thready {
     t = 0;
     // we are on our first cycle of oscillation
     isFirstOsc = isOsc = true;		  
+  }
+  
+  void resizeTo(float l) {
+    isResizing = true;
+    // store target position
+    ypt0 = yAxis-l/2;
+    ypt1 = yAxis+l/2;
+  }
+  
+  void resizeDone() {
+    isResizing = false;
+    // update position one last time
+    updPos();  
   }
 }
 

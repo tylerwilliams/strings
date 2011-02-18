@@ -13,7 +13,7 @@ class Drawer {
   
   // update my line
   void upd() {
-    xp1 = getUserX(); yp1 = getUserY();
+//    xp1 = getUserX(); yp1 = getUserY();
     redraw();
   }
   

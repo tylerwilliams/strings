@@ -3,11 +3,13 @@ import ddf.minim.signals.*;
 import ddf.minim.analysis.*;
 import ddf.minim.effects.*;
 
-import org.openkinect.*;
-import org.openkinect.processing.*;
+import oscP5.*;
+// oscP5 instance for the osc communication
+OscP5 oscP5;
+int receiveAtPort;
+String host;
+String oscP5event;
 
-// Have kinect?
-boolean haveKinect = true;
 // variables
 boolean isMouseDown = false;
 // is user engaged, playing, within threshhold
@@ -15,7 +17,7 @@ boolean isEngaged = false;
 // are we in draw mode?
 boolean isDrawMode = false;
 // my current drawing object
-Drawer drawer0;
+//Drawer drawer0;
 // min and max speed, when to cap it - pixels per millisecond
 float spdMin = 70; float spdMax = 1300; float spd;
 // min max speed as a ratio
@@ -35,6 +37,7 @@ float t0 = millis();
 float t1 = t0;
 // mouse positions
 float xp0, xp1, yp0, yp1;
+
 // store the origin for our world relative to canvas
 float xo = 0;
 float yo = 0;
@@ -47,46 +50,113 @@ float rSpdGrab = 0.4;
 int notes = 38;
 // Audio
 Minim minim;
+float yAxis;
+
 // array of audio player objects
 AudioSample[] arrSamples = new AudioSample[notes];
 // Kinect objects
-KinectTracker tracker;
-Kinect kinect;
-// Sidewalk installation
+//KinectTracker tracker;
+//Kinect kinect;
 Sidewalk sidewalk;
-
-PVector handPos;
+HashMap handMap;
 
 // -----------------------------------------------------
 // Setup and draw loop
 // -----------------------------------------------------  
+void initOsc() {
+       int rPort = 7000;
+       oscP5event = "oscEvent";
+       /* start oscP5, listening for incoming messages at port 12000 */
+       oscP5 = new OscP5(this,rPort);
+     mouseMoved();
+}
+
+void oscEvent(OscIn oscIn) {
+  if(oscIn.checkAddrPattern("hand")==true) {
+    /* add/del hand */
+    if(oscIn.checkTypetag("is")) {
+      int handIndex = oscIn.get(0).intValue();  
+      String oper = oscIn.get(1).stringValue();
+      println(oper+" hand "+handIndex);
+      if (oper.equals("add")) {
+        handMap.put(new Integer(handIndex), new Hand() );
+      }
+      else if (oper.equals("del")) {
+        Hand h = (Hand) handMap.get(new Integer(handIndex));
+        h.isDead = true;
+        handMap.remove(new Integer(handIndex));
+      }
+      // Are we engaged? ie, is numHands >= 1?
+      if (handMap.keySet().size() >= 1) {
+        engage();
+      }
+      else {
+        disengage();
+      }
+      return;
+    }
+    
+    /* update hand? */
+    else if(oscIn.checkTypetag("iffs")) {
+      int handIndex = oscIn.get(0).intValue();  
+      float handX = oscIn.get(1).floatValue();
+      float handY = oscIn.get(2).floatValue();
+      if (isEngaged) {
+        if (handMap.containsKey(new Integer(handIndex))) {
+          Hand h = (Hand)handMap.get(new Integer(handIndex));
+          h.updateLocation(int(handX), int(handY));
+//          handMap.put(, new PVector(int(handX), int(handY)) );
+//          print("update! "+int(handX)+" "+int(handY));
+        }
+      }
+      return;
+    }
+  }
+  return;
+}
 
 void setup() {
-  int w, h;
-  frameRate(40);
-  // sound class
+  handMap = new HashMap();
   minim = new Minim(this);
-  // are we using a kinect?
-  if (haveKinect) {
-    kinect = new Kinect(this);
-    tracker = new KinectTracker();
-    w = tracker.kw; h = tracker.kh+40;
-  } else {
-    w = 640; h = 520;
+  frameRate(40);
+  initOsc();
+  size(640,480);
+  yAxis = height/2;
+  // create some random threads for testing
+  /*
+  for (int i = 0; i < 3; i++) {    
+    addThread(random(width), random(height), random(width), random(height));
   }
-  size(w,h);
-  //
+  */
+  
+  // create some vertical strings for testing
+//  float xp = 80;
+//  float yp = height/2;
+//  float len;
+//  for (int i = 0; i < 10; i++) {    
+//    len = 50+random(height-80);
+//    addThread(xp, yp-len/2, xp, yp+len/2);
+//    xp += 50;
+//  }
   sidewalk = new Sidewalk();
+   
+  //
+  // initialize audio
+  /*
+  String pre; AudioSample as;
+  for (int i = 0; i < notes; i++) {
+    pre = i < 10 ? "0" : "";
+    as = minim.loadSample("cello_" + pre + i + ".mp3", 512);
+    arrSamples[i] = as;
+  }
+  */
 }
 
 // draw loop
 void draw() {
   // clear background
   background(0);
-  if (haveKinect) {
-    tracker.track();
-    tracker.display();
-  }
+  
   // update everything
   upd(); 
 }
@@ -100,27 +170,29 @@ void upd() {
   // update time
   updTime();
   // update position
-  updPos();
+//  updPos();
   // update the current drawing
-  if (isDrawMode && (drawer0 != null)) drawer0.upd();
+//  if (isDrawMode && (drawer0 != null)) drawer0.upd();
   // update my threads
   updThreads();
-  // update mouse down mode? or if we're in kinect mode, always run it
-  if (isMouseDown || haveKinect) {
+  // update mouse down mode?
+  if (isMouseDown && isDrawMode) {
+    updMouseDownDraw();
+  } else {
     updMouseDown();
   }
   
-  if (haveKinect) updKinectInfo();
-
+  updDisplay();
+  sidewalk.upd();
   // increment time
   t0 = t1;
 }
 
-void updKinectInfo(){
-  int t = tracker.getThreshold();
+void updDisplay(){
+//  int t = tracker.getThreshold();
   fill(70);
-  text("threshold: " + t + "    " +  
-    "framerate: " + (int)frameRate + "    ", 10, height-15);
+//  text("threshold: " + t + "    " +  
+//    "framerate: " + (int)frameRate + "    ", 10, height-15);
     //"UP increase threshold, DOWN decrease threshold",10,height-15); 
   
   // show the hand position
@@ -130,7 +202,17 @@ void updKinectInfo(){
     fill(255, 200);
     noStroke();
     smooth();
-    ellipse(handPos.x,handPos.y,25,25);
+    
+    Iterator i = handMap.values().iterator();  // Get an iterator
+    while (i.hasNext()) {
+      Object o = i.next();
+      if (o!=null) {
+        Hand h = (Hand)o;
+//        print("x:"+h.location.x+"y:"+h.location.y);
+        ellipse(h.location.x,h.location.y,25,25);
+      }
+    }
+
     noSmooth();
   }
 }
@@ -141,29 +223,6 @@ void updTime() {
 }
 
 // update position general
-void updPos() {
-  // set hand pos
-  if (haveKinect) handPos = tracker.getLerpedPos();
-  // how much time has elapsed since last update?
-  float elap = (t1-t0)/1000;
-  // get new position
-  xp1 = getUserX(); yp1 = getUserY();
-  // update point objects
-  pt0.x = xp0; pt0.y = yp0;
-  pt1.x = xp1; pt1.y = yp1;
-  // change in position
-  float dx = xp1-xp0; float dy = yp1-yp0;
-  // distance traveled
-  float dist = dist(xp0, yp0, xp1, yp1);
-  // current speed - pixels per second
-  spd = dist/elap;
-  // normalize it from 0 to 1
-  rSpd = lim((spd-spdMin)/(spdMax-spdMin), 0, 1);
-  // get average speed as ratio
-  rSpdAvg = (rSpdAvg*(fAvg-1)/fAvg) + (rSpd*(1/fAvg));
-  // store previous position
-  xp0 = xp1; yp0 = yp1;
-}
 
 // update when mouse is down
 void updMouseDown() {
@@ -174,24 +233,34 @@ void updMouseDown() {
   // go through threads
   for (int i = 0; i < ctThreads; i++) {
     th = arrThreads[i];
-    // find line intersection
-    pt = lineIntersect(pt0, pt1, th.pt0, th.pt1);
-    // did we get a point?
-    if (pt == null) continue;
-    // intersection point
-    xi = pt.x; yi = pt.y;
-    // if it's not already grabbed, grab it
-    if (!th.isGrabbed) {
-      // is the user moving too fast to allow grabbing of this string?
-      if(getSpdAvg() <= rSpdGrab) {
-        // grab new thread
-        th.grab(xi, yi, true);
-      } else {
-        // brush over thread
-        th.pluck(xi, yi, true);
+    
+    Iterator handIter = handMap.values().iterator();
+    while (handIter.hasNext()) {
+      Hand h = (Hand) handIter.next();
+      // find line intersection
+      pt = lineIntersect(h.location, h.prevLocation, th.pt0, th.pt1);
+      // did we get a point?
+      if (pt == null) continue;
+      // intersection point
+      xi = pt.x; yi = pt.y;
+      // if it's not already grabbed, grab it
+      if (!th.isGrabbed) {
+        // is the user moving too fast to allow grabbing of this string?
+        if(getSpdAvg() <= rSpdGrab) {
+          // grab new thread
+          th.grab(xi, yi, h);
+        } else {
+          // brush over thread
+          th.pluck(xi, yi, h);
+        }
       }
     }
   }
+}
+
+// update while mouse down in draw mode
+void updMouseDownDraw() {
+  
 }
 
 // update all threads
@@ -214,18 +283,18 @@ void updThreads() {
 // -----------------------------------------------------
 
 // mouseDown
-void mousePressed() {
-  isMouseDown = true;
-  // in draw mode
-  if (isDrawMode) {
-    drawer0 = new Drawer(getUserX(), getUserY());
-  
-  // in play mode
-  } else {
-    // check instant grab - in case they pressed right on top of a thread
-    checkInstantGrab();	
-  }
-}
+//void mousePressed() {
+//  isMouseDown = true;
+//  // in draw mode
+//  if (isDrawMode) {
+////    drawer0 = new Drawer(getUserX(), getUserY());
+//  
+//  // in play mode
+//  } else {
+//    // check instant grab - in case they pressed right on top of a thread
+////    checkInstantGrab();	
+//  }
+//}
 
 // mouseUp
 void mouseReleased() {
@@ -234,7 +303,7 @@ void mouseReleased() {
   // in draw mode
   if (isDrawMode) {
     // tell drawer we are done
-    drawer0.done(); drawer0 = null;
+//    drawer0.done(); drawer0 = null;
     
   // in play mode
   } else {
@@ -246,6 +315,7 @@ void mouseReleased() {
 // engage 
 void engage() {
   isEngaged = true;
+  println("engage");
   // check instant grab? (haven't implemented this function here)
   checkInstantGrab();
 }
@@ -253,13 +323,15 @@ void engage() {
 // disengage
 void disengage() {
   isEngaged = false;
+    println("disengage");
   // drop all threads
-  if (isGrabbing()) dropAll();
+//  checkDropAll();
 }
 
 void keyPressed() {
-  if (key == 'd' || key == 'D') {
-    // toggle mode
+   if (key == 'r' || key == 'r') {
+    sidewalk.reconfigure();
+  } else if (key == 'd' || key == 'D') {
     if (isDrawMode) {
       println("You are in play mode.");
       isDrawMode = false;
@@ -268,16 +340,14 @@ void keyPressed() {
       isDrawMode = true;
     }
   } else if (key == CODED) {
-    // break here if we don't have a kinect
-    if (!haveKinect) return;
-    int t = tracker.getThreshold();
+//    int t = tracker.getThreshold();
     if (keyCode == UP) {
-      t+=5;
-      tracker.setThreshold(t);
+//      t+=5;
+//      tracker.setThreshold(t);
     }
     else if (keyCode == DOWN) {
-      t-=5;
-      tracker.setThreshold(t);
+//      t-=5;
+//      tracker.setThreshold(t);
     }
   }
 }
@@ -313,19 +383,29 @@ void dropAll() {
   }
 }
 
+//void checkDropAll() {
+//  Thready th;
+//  for (int i = 0; i < ctThreads; i++) {
+//    th = arrThreads[i];
+//    if (th.isGrabbed( && th.currentHand==null) th.drop();
+//  }
+//}
+
 float getSpdAvg() {
   return rSpdAvg;
 }
 
 // get user position
-float getUserX() {
-  if (haveKinect) return handPos.x;
-  return mouseX-xo;
-}
-float getUserY() {
-  if (haveKinect) return handPos.y;
-  return mouseY-yo;
-}
+//float getUserX() {
+//  //float mouseXRel = mouseX-xo;
+//  //return mouseXRel;
+//  return handPos.x;
+//}
+//float getUserY() {
+//  //float mouseYRel = mouseY-yo;
+//  //return mouseYRel;
+//  return handPos.y;
+//}
 
 // -----------------------------------------------------
 // Common functions
@@ -358,7 +438,7 @@ int sign(float n) {
 }
 
 void stop() {
-  if (haveKinect) tracker.quit();
+//  tracker.quit();
   super.stop();
   minim.stop();  
 }
